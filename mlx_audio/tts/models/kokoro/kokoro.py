@@ -7,19 +7,11 @@ from typing import Dict, Optional, Union
 
 import mlx.core as mx
 import mlx.nn as nn
-import numpy as np
 from loguru import logger
 
-from ...utils import get_class_predicate
-from ..base import GenerationResult, check_array_shape
+from ..base import BaseModelArgs, GenerationResult, check_array_shape
 from .istftnet import Decoder
-from .modules import (
-    AdaLayerNorm,
-    AlbertModelArgs,
-    CustomAlbert,
-    ProsodyPredictor,
-    TextEncoder,
-)
+from .modules import AlbertModelArgs, CustomAlbert, ProsodyPredictor, TextEncoder
 from .pipeline import KokoroPipeline
 
 # Force reset logger configuration at the top of your file
@@ -52,6 +44,24 @@ def sanitize_lstm_weights(key: str, state_dict: mx.array) -> dict:
     return {key: state_dict}
 
 
+@dataclass
+class ModelConfig(BaseModelArgs):
+    istftnet: dict
+    dim_in: int
+    dropout: float
+    hidden_dim: int
+    max_conv_dim: int
+    max_dur: int
+    multispeaker: bool
+    n_layer: int
+    n_mels: int
+    n_token: int
+    style_dim: int
+    text_encoder_kernel_size: int
+    plbert: dict
+    vocab: Dict[str, int]
+
+
 class Model(nn.Module):
     """
     KokoroModel is a torch.nn.Module with 2 main responsibilities:
@@ -69,37 +79,35 @@ class Model(nn.Module):
 
     REPO_ID = "prince-canuma/Kokoro-82M"
 
-    def __init__(self, config: dict, repo_id: str = None):
+    def __init__(self, config: ModelConfig, repo_id: str = None):
         super().__init__()
         self.repo_id = repo_id
         self.config = config
-        self.vocab = config["vocab"]
+        self.vocab = config.vocab
         self.bert = CustomAlbert(
-            AlbertModelArgs(vocab_size=config["n_token"], **config["plbert"])
+            AlbertModelArgs(vocab_size=config.n_token, **config.plbert)
         )
 
-        self.bert_encoder = nn.Linear(
-            self.bert.config.hidden_size, config["hidden_dim"]
-        )
+        self.bert_encoder = nn.Linear(self.bert.config.hidden_size, config.hidden_dim)
         self.context_length = self.bert.config.max_position_embeddings
         self.predictor = ProsodyPredictor(
-            style_dim=config["style_dim"],
-            d_hid=config["hidden_dim"],
-            nlayers=config["n_layer"],
-            max_dur=config["max_dur"],
-            dropout=config["dropout"],
+            style_dim=config.style_dim,
+            d_hid=config.hidden_dim,
+            nlayers=config.n_layer,
+            max_dur=config.max_dur,
+            dropout=config.dropout,
         )
         self.text_encoder = TextEncoder(
-            channels=config["hidden_dim"],
-            kernel_size=config["text_encoder_kernel_size"],
-            depth=config["n_layer"],
-            n_symbols=config["n_token"],
+            channels=config.hidden_dim,
+            kernel_size=config.text_encoder_kernel_size,
+            depth=config.n_layer,
+            n_symbols=config.n_token,
         )
         self.decoder = Decoder(
-            dim_in=config["hidden_dim"],
-            style_dim=config["style_dim"],
-            dim_out=config["n_mels"],
-            **config["istftnet"],
+            dim_in=config.hidden_dim,
+            style_dim=config.style_dim,
+            dim_out=config.n_mels,
+            **config.istftnet,
         )
 
     @dataclass
@@ -150,9 +158,13 @@ class Model(nn.Module):
             input_ids, input_lengths, text_mask
         )  # Working fine in MLX
         asr = t_en @ pred_aln_trg
-        audio = self.decoder(asr, F0_pred, N_pred, ref_s[:, :128])[
-            0
-        ]  # Working fine in MLX
+
+        decoder = mx.compile(decoder) if decoder is not None else self.decoder
+        audio = decoder(asr, F0_pred, N_pred, ref_s[:, :128])[0]  # Working fine in MLX
+
+        # Evaluate the computation graph for audio and pred_dur before returning
+        mx.eval(audio, pred_dur)
+
         return self.Output(audio=audio, pred_dur=pred_dur) if return_output else audio
 
     def sanitize(self, weights):
@@ -240,11 +252,11 @@ class Model(nn.Module):
     def generate(
         self,
         text: str,
-        voice: str = "af_heart",
+        voice: str = None,
         speed: float = 1.0,
-        lang_code: str = "af",
+        lang_code: str = "a",
         split_pattern: str = r"\n+",
-        verbose: bool = False,
+        **kwargs,
     ):
         pipeline = KokoroPipeline(
             model=self,
@@ -252,10 +264,11 @@ class Model(nn.Module):
             lang_code=lang_code,
         )
 
+        if voice is None:
+            voice = "af_heart"
+
         # Track overall generation time
         start_time = time.time()
-
-        metrics = []
 
         for segment_idx, (graphenes, phonemes, audio) in enumerate(
             pipeline(text, voice=voice, speed=speed, split_pattern=split_pattern)
@@ -272,11 +285,6 @@ class Model(nn.Module):
             # Calculate audio duration in seconds
             sample_rate = 24000  # Assuming 24kHz sample rate, adjust if different
             audio_duration_seconds = samples / sample_rate * audio.shape[1]
-
-            # Calculate milliseconds per sample
-            ms_per_sample = (
-                1000 / sample_rate
-            )  # This gives 0.0417 ms per sample at 24kHz
 
             # Calculate real-time factor (RTF)
             rtf = (
