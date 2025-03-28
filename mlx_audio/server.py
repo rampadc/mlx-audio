@@ -2,9 +2,9 @@ import argparse
 import importlib.util
 import logging
 import os
+import re
 import sys
 import uuid
-import re
 
 import numpy as np
 import soundfile as sf
@@ -63,7 +63,9 @@ DEFAULT_GENERATION_VERBOSE = False
 OUTPUT_FOLDER = os.environ.get("MLX_AUDIO_OUTPUT_FOLDER", DEFAULT_OUTPUT_FOLDER)
 FILE_PREFIX = os.environ.get("MLX_AUDIO_FILE_PREFIX", DEFAULT_FILE_PREFIX)
 AUDIO_FORMAT = os.environ.get("MLX_AUDIO_FILE_FORMAT", DEFAULT_AUDIO_FORMAT)
-GENERATION_VERBOSE = os.environ.get("MLX_AUDIO_GENERATION_VERBOSE", str(DEFAULT_GENERATION_VERBOSE)).lower() in ('true', 'yes', '1', 't')
+GENERATION_VERBOSE = os.environ.get(
+    "MLX_AUDIO_GENERATION_VERBOSE", str(DEFAULT_GENERATION_VERBOSE)
+).lower() in ("true", "yes", "1", "t")
 
 
 @app.post("/tts")
@@ -131,7 +133,7 @@ def tts_endpoint(
     # Use specified filename if provided, otherwise generate a unique one
     if filename:
         # Sanitize filename - keep only alphanumeric chars, underscore, hyphen, and period
-        filename = re.sub(r'[^\w\-\.]', '_', os.path.basename(filename))
+        filename = re.sub(r"[^\w\-\.]", "_", os.path.basename(filename))
 
         # Limit filename length
         if len(filename) > 100:
@@ -500,7 +502,7 @@ def main(host="127.0.0.1", port=8000, verbose=False):
         "--output-dir",
         type=str,
         default=OUTPUT_FOLDER,
-        help=f"Output directory for audio files (default: {OUTPUT_FOLDER}, can also be set via MLX_AUDIO_OUTPUT_FOLDER env var)"
+        help=f"Output directory for audio files (default: {OUTPUT_FOLDER}, can also be set via MLX_AUDIO_OUTPUT_FOLDER env var)",
     )
     parser.add_argument(
         "--audio-format",
