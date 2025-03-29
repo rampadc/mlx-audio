@@ -137,6 +137,7 @@ def tts_endpoint(
 
         # Limit filename length
         if len(filename) > 100:
+            logger.warning(f"Filename length exceeds 100 characters. Truncating filename: {filename}")
             filename = filename[:100]
 
         # Ensure the filename has the correct extension
